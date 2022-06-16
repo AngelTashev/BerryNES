@@ -75,7 +75,7 @@ void CPU6502::SetFlag(FLAGS6502 f, bool v)
 
 /* Addressing modes */
 
-// Implied
+// Implied - Direct instruction
 uint8_t CPU6502::IMP()
 {
 	// This mode could work with the accumulator (PHA, etc.)
@@ -217,7 +217,7 @@ uint8_t CPU6502::IZY()
 	return 0;
 }
 
-// Relative - -127->128 locations from the branch instuction
+// Relative - -128->127 locations from the branch instuction
 uint8_t CPU6502::REL() 
 {
 	addr_rel = read(pc);
@@ -247,10 +247,58 @@ uint8_t CPU6502::AND()
 	return 1;
 }
 
+// Arithmetic Shift Left
+uint8_t CPU6502::ASL()
+{
+	fetch();
+	temp = (uint16_t)fetched << 1;
+	SetFlag(C, (temp & 0xFF00) > 0);
+	SetFlag(Z, (temp & 0x00FF) == 0x00);
+	SetFlag(N, temp & 0x80);
+
+	if (lookup[opcode].addrmode == &CPU6502::IMP)
+		a = temp & 0x00FF;
+	else
+		write(addr_abs, temp & 0x00FF);
+
+	return 0;
+}
+
+// Shift Right
+uint8_t CPU6502::LSR()
+{
+	fetch();
+	SetFlag(C, fetched & 0x0001);
+	temp = (uint16_t)fetched >> 1;
+	SetFlag(Z, (temp & 0x00FF) == 0x00);
+	SetFlag(N, temp & 0x80);
+
+	if (lookup[opcode].addrmode == &CPU6502::IMP)
+		a = temp & 0x00FF;
+	else
+		write(addr_abs, temp & 0x00FF);
+
+	return 0;
+}
+
 // Branch if carry bit is set
 uint8_t CPU6502::BCS() 
 {
 	if (GetFlag(C) == 1)
+	{
+		cycles++;
+		addr_abs = pc + addr_rel;
+		if ((addr_abs & 0xFF00) != (pc & 0xFF00))
+			cycles++;
+		pc = addr_abs;
+	}
+	return 0;
+}
+
+// Branch if carry bit is clear
+uint8_t CPU6502::BCC()
+{
+	if (GetFlag(C) == 0)
 	{
 		cycles++;
 		addr_abs = pc + addr_rel;
@@ -275,7 +323,7 @@ uint8_t CPU6502::BEQ()
 	return 0;
 }
 
-// Branch if negative
+// Branch if not equal
 uint8_t CPU6502::BNE()
 {
 	if (GetFlag(Z) == 0)
@@ -345,6 +393,36 @@ uint8_t CPU6502::BVC()
 	return 0;
 }
 
+uint8_t CPU6502::BIT()
+{
+	fetch();
+	temp = a & fetched;
+	SetFlag(Z, (temp & 0x00FF) == 0x00);
+	SetFlag(N, fetched & (1 << 7));
+	SetFlag(V, fetched & (1 << 6));
+	return 0;
+}
+
+// Break - Program sourced interrupt
+uint8_t CPU6502::BRK()
+{
+	pc++;
+	
+	SetFlag(I, 1);
+	write(0x0100 + stkp, (pc >> 8) & 0x00FF);
+	stkp--;
+	write(0x0100 + stkp, pc & 0x00FF);
+	stkp--;
+
+	SetFlag(B, 1);
+	write(0x0100 + stkp, status);
+	stkp--;
+	SetFlag(B, 0);
+
+	pc = (uint16_t)read(0xFFFE) | ((uint16_t)read(0xFFFF) << 8);
+	return 0;
+}
+
 // CLear carry
 uint8_t CPU6502::CLC()
 {
@@ -371,6 +449,157 @@ uint8_t CPU6502::CLV()
 {
 	SetFlag(D, false);
 	return 0;
+}
+
+// Compare accumulator
+uint8_t CPU6502::CMP()
+{
+	fetch();
+	temp = (uint16_t)a - (uint16_t)fetched;
+	SetFlag(C, a >= fetched);
+	SetFlag(Z, (temp & 0x00FF) == 0x00);
+	SetFlag(N, temp & 0x80);
+	return 1;
+}
+
+// Compare X register
+uint8_t CPU6502::CPX()
+{
+	fetch();
+	temp = (uint16_t)x - (uint16_t)fetched;
+	SetFlag(C, x >= fetched);
+	SetFlag(Z, (temp & 0x00FF) == 0x00);
+	SetFlag(N, temp & 0x80);
+	return 0;
+}
+
+// Compare Y register
+uint8_t CPU6502::CPY()
+{
+	fetch();
+	temp = (uint16_t)y - (uint16_t)fetched;
+	SetFlag(C, y >= fetched);
+	SetFlag(Z, (temp & 0x00FF) == 0x00);
+	SetFlag(N, temp & 0x80);
+	return 0;
+}
+
+// Decrement value at memory location
+uint8_t CPU6502::DEC() 
+{
+	fetch();
+	temp = fetched - 1;
+	write(addr_abs, temp & 0x00FF);
+	SetFlag(Z, (temp & 0x00FF) == 0x00);
+	SetFlag(N, temp & 0x80);
+	return 0;
+}
+
+// Decrement X register
+uint8_t CPU6502::DEX() 
+{
+	x--;
+	SetFlag(Z, x == 0x00);
+	SetFlag(N, x & 0x80);
+	return 0;
+}
+
+// Decrement Y register
+uint8_t CPU6502::DEY() 
+{
+	y--;
+	SetFlag(Z, y == 0x00);
+	SetFlag(N, y & 0x80);
+	return 0;
+}
+
+// XOR on accumulator
+uint8_t CPU6502::EOR() 
+{
+	fetch();
+	a ^= fetched;
+	SetFlag(Z, a == 0x00);
+	SetFlag(N, a & 0x80);
+	return 1;
+}
+
+// Increment at memory location
+uint8_t CPU6502::INC()
+{
+	fetch();
+	temp = fetched + 1;
+	write(addr_abs, temp & 0x00FF);
+	SetFlag(Z, (temp & 0x00FF) == 0x00);
+	SetFlag(N, temp & 0x80);
+	return 0;
+}
+
+// Increment X register
+uint8_t CPU6502::INX() 
+{
+	x++;
+	SetFlag(Z, x == 0x00);
+	SetFlag(N, x & 0x80);
+	return 0;
+}
+
+// Increment Y register
+uint8_t CPU6502::INY()
+{
+	y++;
+	SetFlag(Z, y == 0x00);
+	SetFlag(N, y & 0x80);
+	return 0;
+}
+
+// Jump to location
+uint8_t CPU6502::JMP() 
+{
+	pc = addr_abs;
+	return 0;
+}
+
+// Jump to sub-routine - push current pc to stack, then jump
+uint8_t CPU6502::JSR()
+{
+	pc--;
+
+	write(0x0100 + stkp, (pc >> 8) & 0x00FF);
+	stkp--;
+	write(0x0100 + stkp, pc & 0x00FF);
+	stkp--;
+	pc = addr_abs;
+	return 0;
+}
+
+// Load the accumulator
+uint8_t CPU6502::LDA()
+{
+	fetch();
+	a = fetched;
+	SetFlag(Z, a == 0x00);
+	SetFlag(N, a & 0x80);
+	return 1;
+}
+
+// Load X register
+uint8_t CPU6502::LDX() 
+{
+	fetch();
+	x = fetched;
+	SetFlag(Z, x == 0x00);
+	SetFlag(N, x & 0x80);
+	return 1;
+}
+
+// Load Y register
+uint8_t CPU6502::LDY()
+{
+	fetch();
+	y = fetched;
+	SetFlag(Z, y == 0x00);
+	SetFlag(N, y & 0x80);
+	return 1;
 }
 
 
@@ -403,4 +632,109 @@ uint8_t CPU6502::SBC()
 	a = temp & 0x00FF;
 
 	return 1;
+}
+
+// Push accumulator to the stack
+uint8_t CPU6502::PHA()
+{
+	// 0x0100 - address allocation for stack
+	write(0x0100 + stkp, a);
+	stkp--;
+	return 0;
+}
+
+// Pop from the stack
+uint8_t CPU6502::PLA()
+{
+	stkp++;
+	a = read(0x0100 + stkp);
+	SetFlag(Z, a == 0x00);
+	SetFlag(N, a & 0x80);
+	return 0;
+}
+
+// Return from nmi
+uint8_t CPU6502::RTI()
+{
+	stkp++;
+	status = read(0x0100 + stkp);
+	status &= ~B;
+	status &= ~U;
+
+	stkp++;
+	pc = (uint16_t)read(0x0100 + stkp);
+	stkp++;
+	pc |= (uint16_t)read(0x0100 + stkp);
+	return 0;
+}
+
+void CPU6502::reset()
+{
+	a = 0;
+	x = 0;
+	y = 0;
+	stkp = 0xFD;
+	status = 0x00 | U;
+
+	// Pointer to an address for the pc
+	addr_abs = 0xFFFC;
+	uint16_t lo = read(addr_abs + 0);
+	uint16_t hi = read(addr_abs + 1);
+	pc = (hi << 8) | lo;
+
+	addr_rel = 0x0000;
+	addr_abs = 0x0000;
+	fetched = 0x00;
+
+	cycles = 8;
+}
+
+void CPU6502::irq()
+{
+	if (GetFlag(I) == 0) 
+	{
+		write(0x0100 + stkp, (pc >> 8) & 0x00FF);
+		stkp--;
+		write(0x0100 + stkp, pc & 0x00FF);
+		stkp--;
+
+		// Push status to stack
+		SetFlag(B, 0);
+		SetFlag(U, 1);
+		SetFlag(I, 1);
+		write(0x0100 + stkp, status);
+		stkp--;
+
+		// Read new program counter location from 0xFFFE
+		addr_abs = 0xFFFE;
+		uint16_t lo = read(addr_abs + 0);
+		uint16_t hi = read(addr_abs + 1);
+		pc = (hi << 8) | lo;
+
+		cycles = 7;
+
+	}
+}
+
+void CPU6502::nmi()
+{
+	write(0x0100 + stkp, (pc >> 8) & 0x00FF);
+	stkp--;
+	write(0x0100 + stkp, pc & 0x00FF);
+	stkp--;
+
+	// Push status to stack
+	SetFlag(B, 0);
+	SetFlag(U, 1);
+	SetFlag(I, 1);
+	write(0x0100 + stkp, status);
+	stkp--;
+
+	// Read new program counter location from 0xFFFA
+	addr_abs = 0xFFFA;
+	uint16_t lo = read(addr_abs + 0);
+	uint16_t hi = read(addr_abs + 1);
+	pc = (hi << 8) | lo;
+
+	cycles = 8;
 }
